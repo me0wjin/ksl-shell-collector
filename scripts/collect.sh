@@ -257,10 +257,55 @@ organize_pipeline_results() {
     cp "$latest_log" "$log_dir/pipeline.log"
 }
 
+saved_frame_count() {
+    local log_file="$1" count
+    count="$(awk '
+        {
+            lower = tolower($0)
+        }
+        /저장된[[:space:]]*프레임[[:space:]]*수/ || lower ~ /saved[[:space:]_-]*frames?/ || lower ~ /saved.*frame/ {
+            line = $0
+            while (match(line, /[0-9]+/)) {
+                value = substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+            }
+            if (value != "") { print value; exit }
+        }
+    ' "$log_file" 2>/dev/null)"
+    printf '%s\n' "${count:-확인 불가}"
+}
+
+result_box_row() {
+    local text="$1" chars bytes wide padding
+    chars="$(printf '%s' "$text" | wc -m | awk '{print $1}')"
+    bytes="$(printf '%s' "$text" | wc -c | awk '{print $1}')"
+    wide=$((chars + (bytes - chars) / 2))
+    padding=$((48 - wide))
+    [ "$padding" -lt 0 ] && padding=0
+    printf '| %s%*s |\n' "$text" "$padding" ''
+}
+
+show_recording_result() {
+    local word="$1" user_id="$2" duration="$3" frames="$4"
+    printf '\n%s+--------------------------------------------------+%s\n' "$C_TITLE" "$C_RESET"
+    printf '%s|                  촬영 결과 확인                  |%s\n' "$C_TITLE" "$C_RESET"
+    printf '%s+--------------------------------------------------+%s\n' "$C_TITLE" "$C_RESET"
+    result_box_row "동작명       : $word"
+    result_box_row "촬영자 ID    : $user_id"
+    result_box_row "촬영 시간    : ${duration}초"
+    result_box_row "저장 프레임  : $frames"
+    result_box_row "임시 파일    : raw/.candidate_video.mp4"
+    printf '+--------------------------------------------------+\n'
+    printf '| %s[Y]%s 저장하기                                     |\n' "$C_OK" "$C_RESET"
+    printf '| %s[N]%s 폐기하기                                     |\n' "$C_WARN" "$C_RESET"
+    printf '| %s[R]%s 재촬영하기                                   |\n' "$C_TITLE" "$C_RESET"
+    printf '+--------------------------------------------------+\n'
+}
+
 finalize_recording() {
     local word="$1" safe_word="$2" user_id="$3" safe_user="$4" recommended="$5" duration="$6" custom="$7"
     local trial_no date_tag trial_name trial_dir raw_dir candidate candidate_log pipeline_input marker collect_log
-    local answer record_ok
+    local answer record_ok frames relative_candidate relative_video relative_trial relative_collect_log
 
     date_tag="$(date +'%Y%m%d_%H%M%S')"
     mkdir -p "$DATASET_ROOT/$safe_word"
@@ -274,16 +319,20 @@ finalize_recording() {
 
     while true; do
         rm -f "$candidate" "$candidate_log"
-        printf '\n%s[촬영]%s %s / 촬영자 %s / %s초 / countdown 3초\n' "$C_TITLE" "$C_RESET" "$word" "$user_id" "$duration"
-        printf '얼굴, 상체, 양손이 화면 안에 보이도록 준비하세요.\n\n'
+        printf '\n%s[촬영 준비]%s\n' "$C_TITLE" "$C_RESET"
+        printf '동작명       : %s\n' "$word"
+        printf '촬영자 ID    : %s\n' "$user_id"
+        printf '촬영 시간    : %s초\n' "$duration"
+        printf '대기 시간    : %s초\n\n' "$RECORD_COUNTDOWN_SECONDS"
+        printf '카메라가 준비되면 자동으로 촬영이 시작됩니다.\n\n'
 
         record_ok=1
         "$VENV_PYTHON" "$RECORD_PY" \
             --output "$candidate" \
             --camera 0 \
             --duration "$duration" \
-            --countdown 3 \
-            --warmup "$CAMERA_WARMUP_SECONDS" 2>&1 | tee "$candidate_log" || record_ok=0
+            --countdown "$RECORD_COUNTDOWN_SECONDS" \
+            --warmup "$CAMERA_WARMUP_SECONDS" > "$candidate_log" 2>&1 || record_ok=0
 
         if [ "$record_ok" -ne 1 ] || [ ! -s "$candidate" ]; then
             printf '%s[ERROR] 촬영 영상이 생성되지 않았습니다.%s\n' "$C_ERR" "$C_RESET"
@@ -291,8 +340,15 @@ finalize_recording() {
             return 1
         fi
 
+        frames="$(saved_frame_count "$candidate_log")"
+        relative_candidate="${candidate#"$BASE_DIR"/}"
+        printf '촬영이 종료되었습니다.\n'
+        printf '저장된 프레임 수 : %s\n' "$frames"
+        printf '임시 경로 : %s\n' "$relative_candidate"
+
         while true; do
-            printf '\nY: 저장한다 / N: 저장하지 않는다 / R: 재촬영한다\n선택: '
+            show_recording_result "$word" "$user_id" "$duration" "$frames"
+            printf '선택 > '
             read -r answer || answer="N"
             case "${answer^^}" in
                 Y)
@@ -305,14 +361,20 @@ finalize_recording() {
                     marker="$trial_dir/.pipeline_started"
                     touch "$marker"
                     collect_log="$trial_dir/logs/collect_detail.log"
-                    printf '\n[처리] 랜드마크 추출, 분리, 검증, 리포트 생성을 시작합니다.\n'
-                    if ! printf '%s\n%s\n' "$word" "$user_id" | bash "$RUN_PIPELINE" 2>&1 | tee "$collect_log"; then
+                    relative_collect_log="${collect_log#"$BASE_DIR"/}"
+                    printf '\n%s[저장 처리]%s\n' "$C_TITLE" "$C_RESET"
+                    printf '영상을 저장했습니다.\n'
+                    printf '랜드마크 추출 및 결과 정리를 진행합니다...\n'
+                    if ! printf '%s\n%s\n' "$word" "$user_id" | bash "$RUN_PIPELINE" > "$collect_log" 2>&1; then
                         rm -f "$marker"
-                        printf '%s[ERROR] 파이프라인 실행에 실패했습니다. 확정 영상은 보존합니다.%s\n' "$C_ERR" "$C_RESET"
+                        printf '\n%s[ERROR] 파이프라인 실행에 실패했습니다.%s\n' "$C_ERR" "$C_RESET"
+                        printf '자세한 내용은 로그 파일을 확인하세요:\n%s\n' "$relative_collect_log"
                         return 1
                     fi
-                    if ! organize_pipeline_results "$trial_dir" "$marker"; then
+                    if ! organize_pipeline_results "$trial_dir" "$marker" >> "$collect_log" 2>&1; then
                         rm -f "$marker"
+                        printf '\n%s[ERROR] 파이프라인 실행에 실패했습니다.%s\n' "$C_ERR" "$C_RESET"
+                        printf '자세한 내용은 로그 파일을 확인하세요:\n%s\n' "$relative_collect_log"
                         return 1
                     fi
                     rm -f "$marker"
@@ -328,12 +390,17 @@ countdown_seconds=3
 camera_warmup_seconds=$CAMERA_WARMUP_SECONDS
 video_path=$raw_dir/video.mp4
 META
-                    printf '\n%s[완료] 저장과 파이프라인 처리가 완료되었습니다.%s\n%s\n' "$C_OK" "$C_RESET" "$trial_dir"
+                    relative_video="${raw_dir#"$BASE_DIR"/}/video.mp4"
+                    relative_trial="${trial_dir#"$BASE_DIR"/}"
+                    printf '\n%s저장이 완료되었습니다.%s\n' "$C_OK" "$C_RESET"
+                    printf '최종 영상 경로 : %s\n' "$relative_video"
+                    printf '결과 폴더 : %s\n' "$relative_trial"
                     return 0
                     ;;
                 N)
                     rm -rf "$trial_dir"
-                    printf '%s저장하지 않았습니다.%s\n' "$C_WARN" "$C_RESET"
+                    printf '\n%s저장하지 않았습니다.%s\n' "$C_WARN" "$C_RESET"
+                    printf '임시 파일과 빈 trial 폴더를 정리했습니다.\n'
                     return 0
                     ;;
                 R)
