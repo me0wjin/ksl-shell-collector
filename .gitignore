@@ -1,0 +1,18 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Generated videos
+input_videos/
+*.mp4
+
+# Generated outputs
+data/
+logs/
+
+# OS / editor
+.DS_Store
+.vscode/

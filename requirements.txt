@@ -1,0 +1,9 @@
+mediapipe
+opencv-python
+numpy
+scipy
+tslearn
+pandas
+matplotlib
+fastapi
+uvicorn
