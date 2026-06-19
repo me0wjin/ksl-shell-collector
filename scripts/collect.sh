@@ -140,7 +140,6 @@ show_main_menu() {
     printf '  2. 촬영 시작\n'
     printf '  3. 저장 현황 보기\n'
     printf '  4. 도움말\n'
-    printf '  5. 종료\n'
     printf '  0. 종료\n'
     printf '%s----------------------------------------------------%s\n' "$C_TITLE" "$C_RESET"
 }
@@ -199,7 +198,7 @@ show_help() {
     printf '2. 촬영 시작: 동작과 촬영자를 입력하고 영상을 촬영합니다.\n'
     printf '3. 저장 현황: 전체 목표와 현재 진행률을 표시합니다.\n'
     printf '4. 도움말: 프로그램 사용 방법을 표시합니다.\n'
-    printf '5 또는 0. 프로그램을 종료합니다.\n\n'
+    printf '0. 프로그램을 종료합니다.\n\n'
     printf '저장 구조: data/dataset/{동작}/trial_XXX_{촬영자}_{시각}/\n'
     printf '동작별 최대 저장 횟수는 %s회입니다.\n' "$MAX_SAMPLES_PER_WORD"
     printf '촬영 시간은 catalog 권장값이 자동 적용되며 1~60초로 직접 지정할 수 있습니다.\n'
@@ -433,7 +432,7 @@ main() {
             2) start_recording ;;
             3) show_status ;;
             4) show_help ;;
-            5|0)
+            0)
                 printf '프로그램을 종료합니다.\n'
                 break
                 ;;
