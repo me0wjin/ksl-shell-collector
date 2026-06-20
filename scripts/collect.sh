@@ -229,32 +229,50 @@ newest_dir() {
         sort -nr | awk -F '\t' 'NR==1 { sub(/^[^\t]*\t/, ""); print; exit }'
 }
 
+latest_tsv=""
+latest_part_dir=""
+latest_report=""
+latest_log=""
+
 organize_pipeline_results() {
     local trial_dir="$1" marker="$2"
-    local full_dir parts_root report_dir log_dir latest_tsv latest_part latest_report latest_log part
+    local full_dir parts_root report_dir log_dir part
     full_dir="$trial_dir/landmarks/full"
     parts_root="$trial_dir/landmarks/parts"
     report_dir="$trial_dir/report"
     log_dir="$trial_dir/logs"
 
     latest_tsv="$(newest_file "$BASE_DIR/data/landmarks/all" "$marker")"
-    latest_part="$(newest_dir "$BASE_DIR/data/landmarks/parts" "$marker")"
+    latest_part_dir="$(newest_dir "$BASE_DIR/data/landmarks/parts" "$marker")"
     latest_report="$(newest_file "$BASE_DIR/data/reports" "$marker")"
     latest_log="$(newest_file "$BASE_DIR/logs" "$marker")"
 
-    if [ -z "$latest_tsv" ] || [ -z "$latest_part" ] || [ -z "$latest_report" ] || [ -z "$latest_log" ]; then
+    if [ -z "$latest_tsv" ] || [ -z "$latest_part_dir" ] || [ -z "$latest_report" ] || [ -z "$latest_log" ]; then
         printf '%s[ERROR] 파이프라인 결과 파일을 찾지 못했습니다.%s\n' "$C_ERR" "$C_RESET"
         return 1
     fi
 
-    mkdir -p "$full_dir" "$report_dir" "$log_dir"
-    cp "$latest_tsv" "$full_dir/all_landmarks.tsv"
+    mkdir -p "$full_dir" "$report_dir" "$log_dir" || return 1
+    cp "$latest_tsv" "$full_dir/all_landmarks.tsv" || return 1
     for part in pose face left_hand right_hand; do
-        mkdir -p "$parts_root/$part"
-        cp "$latest_part/$part.tsv" "$parts_root/$part/$part.tsv"
+        mkdir -p "$parts_root/$part" || return 1
+        cp "$latest_part_dir/$part.tsv" "$parts_root/$part/$part.tsv" || return 1
     done
-    cp "$latest_report" "$report_dir/report.txt"
-    cp "$latest_log" "$log_dir/pipeline.log"
+    cp "$latest_report" "$report_dir/report.txt" || return 1
+    cp "$latest_log" "$log_dir/pipeline.log" || return 1
+}
+
+cleanup_pipeline_results() {
+    local pipeline_input="$1"
+
+    case "$latest_tsv" in "$BASE_DIR/data/landmarks/all/"*) ;; *) return 1 ;; esac
+    case "$latest_part_dir" in "$BASE_DIR/data/landmarks/parts/"*) ;; *) return 1 ;; esac
+    case "$latest_report" in "$BASE_DIR/data/reports/"*) ;; *) return 1 ;; esac
+    case "$latest_log" in "$BASE_DIR/logs/"*) ;; *) return 1 ;; esac
+    case "$pipeline_input" in "$INPUT_DIR/"*) ;; *) return 1 ;; esac
+
+    rm -f -- "$latest_tsv" "$latest_report" "$latest_log" "$pipeline_input" || return 1
+    rm -rf -- "$latest_part_dir" || return 1
 }
 
 saved_frame_count() {
@@ -390,8 +408,15 @@ countdown_seconds=3
 camera_warmup_seconds=$CAMERA_WARMUP_SECONDS
 video_path=$raw_dir/video.mp4
 META
+                    if ! cleanup_pipeline_results "$pipeline_input"; then
+                        printf '\n%s[ERROR] 중간 작업 파일을 정리하지 못했습니다.%s\n' "$C_ERR" "$C_RESET"
+                        printf '디버깅을 위해 남은 중간 산출물을 유지합니다.\n'
+                        return 1
+                    fi
                     relative_video="${raw_dir#"$BASE_DIR"/}/video.mp4"
                     relative_trial="${trial_dir#"$BASE_DIR"/}"
+                    printf '중간 작업 파일을 정리했습니다.\n'
+                    printf '최종 결과는 %s에 저장되었습니다.\n' "$relative_trial/"
                     printf '\n%s저장이 완료되었습니다.%s\n' "$C_OK" "$C_RESET"
                     printf '최종 영상 경로 : %s\n' "$relative_video"
                     printf '결과 폴더 : %s\n' "$relative_trial"

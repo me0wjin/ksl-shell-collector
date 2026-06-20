@@ -1,5 +1,7 @@
 # Sync:Us Collector
 
+`data/landmarks`, `data/reports`, `logs`, `input_videos`는 파이프라인 실행 중에만 사용하는 중간 작업 공간입니다. 최종 결과는 `data/dataset/{동작명}/trial_.../`에 저장됩니다.
+
 Shell Script 중심의 한국 수어 데이터 수집 프로그램입니다. `scripts/collect.sh`가 메뉴, 입력 검증, 촬영 승인, 파이프라인 실행, 결과 정리를 제어합니다. Python은 OpenCV 영상 녹화와 MediaPipe 랜드마크 추출 helper로만 사용합니다.
 
 ## 실행
