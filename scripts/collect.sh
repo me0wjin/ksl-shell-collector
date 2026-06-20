@@ -24,6 +24,7 @@ RECORD_COUNTDOWN_SECONDS=3
 VENV_PYTHON="$BASE_DIR/.venv/bin/python"
 RECORD_PY="$BASE_DIR/python/record_video.py"
 RUN_PIPELINE="$BASE_DIR/scripts/run_pipeline.sh"
+VALIDATE_RESULT="$BASE_DIR/scripts/validate_result.sh"
 CHECK_RESOURCES="$BASE_DIR/scripts/check_resources.sh"
 
 INPUT_DIR="$BASE_DIR/input_videos"
@@ -68,14 +69,24 @@ safe_name() {
 }
 
 count_saved() {
-    local safe_word word_dir
+    local safe_word word_dir trial_dir count=0 full_tsv
     safe_word="$(safe_name "$1")"
     word_dir="$DATASET_ROOT/$safe_word"
     if [ ! -d "$word_dir" ]; then
         printf '0\n'
         return
     fi
-    find "$word_dir" -type f -path '*/trial_*/raw/video.mp4' 2>/dev/null | wc -l | awk '{print $1}'
+    while IFS= read -r trial_dir; do
+        full_tsv="$trial_dir/landmarks/full/all_landmarks.tsv"
+        if [ -f "$trial_dir/raw/video.mp4" ] &&
+            [ -f "$trial_dir/metadata.txt" ] &&
+            [ -f "$full_tsv" ] &&
+            [ "$(wc -l < "$full_tsv")" -gt 1 ] &&
+            [ -f "$trial_dir/report/report.txt" ]; then
+            count=$((count + 1))
+        fi
+    done < <(find "$word_dir" -mindepth 1 -maxdepth 1 -type d -name 'trial_*' 2>/dev/null)
+    printf '%s\n' "$count"
 }
 
 catalog_duration() {
@@ -275,6 +286,41 @@ cleanup_pipeline_results() {
     rm -rf -- "$latest_part_dir" || return 1
 }
 
+archive_failed_collect_log() {
+    local collect_log="$1" trial_name="$2" failed_dir failed_log
+    [ -f "$collect_log" ] || return 0
+    failed_dir="$BASE_DIR/logs/failed"
+    mkdir -p "$failed_dir" || return 1
+    failed_log="$failed_dir/failed_collect_${trial_name}.log"
+    cp "$collect_log" "$failed_log" || return 1
+    printf '%s\n' "${failed_log#"$BASE_DIR"/}"
+}
+
+discard_failed_trial() {
+    local trial_dir="$1" pipeline_input="$2" collect_log="$3" trial_name="$4"
+    local failed_log=""
+    failed_log="$(archive_failed_collect_log "$collect_log" "$trial_name" 2>/dev/null || true)"
+    rm -f -- "$pipeline_input"
+    rm -rf -- "$trial_dir"
+
+    printf '\n%s랜드마크가 정상적으로 추출되지 않았습니다.%s\n' "$C_ERR" "$C_RESET"
+    printf '영상에서 얼굴, 상체, 양손이 충분히 보이는지 확인한 뒤 다시 촬영해 주세요.\n'
+    printf '해당 촬영본은 저장 횟수에 포함되지 않습니다.\n'
+    if [ -n "$failed_log" ]; then
+        printf '실패 로그 : %s\n' "$failed_log"
+    fi
+}
+
+organized_result_is_valid() {
+    local trial_dir="$1" full_tsv part
+    full_tsv="$trial_dir/landmarks/full/all_landmarks.tsv"
+    [ -f "$full_tsv" ] && [ "$(wc -l < "$full_tsv")" -gt 1 ] || return 1
+    [ -f "$trial_dir/report/report.txt" ] || return 1
+    for part in pose face left_hand right_hand; do
+        [ -f "$trial_dir/landmarks/parts/$part/$part.tsv" ] || return 1
+    done
+}
+
 saved_frame_count() {
     local log_file="$1" count
     count="$(awk '
@@ -323,7 +369,7 @@ show_recording_result() {
 finalize_recording() {
     local word="$1" safe_word="$2" user_id="$3" safe_user="$4" recommended="$5" duration="$6" custom="$7"
     local trial_no date_tag trial_name trial_dir raw_dir candidate candidate_log pipeline_input marker collect_log
-    local answer record_ok frames relative_candidate relative_video relative_trial relative_collect_log
+    local answer record_ok frames relative_candidate relative_video relative_trial
 
     date_tag="$(date +'%Y%m%d_%H%M%S')"
     mkdir -p "$DATASET_ROOT/$safe_word"
@@ -371,28 +417,33 @@ finalize_recording() {
             case "${answer^^}" in
                 Y)
                     mkdir -p "$trial_dir/logs"
-                    mv "$candidate" "$raw_dir/video.mp4"
                     mv "$candidate_log" "$trial_dir/logs/collection.log"
                     archive_input_videos
                     pipeline_input="$INPUT_DIR/${safe_word}_${safe_user}_${date_tag}.mp4"
-                    cp "$raw_dir/video.mp4" "$pipeline_input"
+                    cp "$candidate" "$pipeline_input"
                     marker="$trial_dir/.pipeline_started"
                     touch "$marker"
                     collect_log="$trial_dir/logs/collect_detail.log"
-                    relative_collect_log="${collect_log#"$BASE_DIR"/}"
                     printf '\n%s[저장 처리]%s\n' "$C_TITLE" "$C_RESET"
                     printf '영상을 저장했습니다.\n'
                     printf '랜드마크 추출 및 결과 정리를 진행합니다...\n'
                     if ! printf '%s\n%s\n' "$word" "$user_id" | bash "$RUN_PIPELINE" > "$collect_log" 2>&1; then
                         rm -f "$marker"
-                        printf '\n%s[ERROR] 파이프라인 실행에 실패했습니다.%s\n' "$C_ERR" "$C_RESET"
-                        printf '자세한 내용은 로그 파일을 확인하세요:\n%s\n' "$relative_collect_log"
+                        discard_failed_trial "$trial_dir" "$pipeline_input" "$collect_log" "$trial_name"
                         return 1
                     fi
                     if ! organize_pipeline_results "$trial_dir" "$marker" >> "$collect_log" 2>&1; then
                         rm -f "$marker"
-                        printf '\n%s[ERROR] 파이프라인 실행에 실패했습니다.%s\n' "$C_ERR" "$C_RESET"
-                        printf '자세한 내용은 로그 파일을 확인하세요:\n%s\n' "$relative_collect_log"
+                        discard_failed_trial "$trial_dir" "$pipeline_input" "$collect_log" "$trial_name"
+                        return 1
+                    fi
+                    if ! bash "$VALIDATE_RESULT" \
+                        "$trial_dir/landmarks/full/all_landmarks.tsv" \
+                        "$latest_part_dir" >> "$collect_log" 2>&1 ||
+                        ! organized_result_is_valid "$trial_dir"; then
+                        rm -f "$marker"
+                        cleanup_pipeline_results "$pipeline_input" >> "$collect_log" 2>&1 || true
+                        discard_failed_trial "$trial_dir" "$pipeline_input" "$collect_log" "$trial_name"
                         return 1
                     fi
                     rm -f "$marker"
@@ -408,6 +459,7 @@ countdown_seconds=3
 camera_warmup_seconds=$CAMERA_WARMUP_SECONDS
 video_path=$raw_dir/video.mp4
 META
+                    mv "$candidate" "$raw_dir/video.mp4"
                     if ! cleanup_pipeline_results "$pipeline_input"; then
                         printf '\n%s[ERROR] 중간 작업 파일을 정리하지 못했습니다.%s\n' "$C_ERR" "$C_RESET"
                         printf '디버깅을 위해 남은 중간 산출물을 유지합니다.\n'
@@ -494,7 +546,8 @@ start_recording() {
         return
     fi
 
-    if [ ! -x "$VENV_PYTHON" ] || [ ! -f "$RECORD_PY" ] || [ ! -f "$RUN_PIPELINE" ]; then
+    if [ ! -x "$VENV_PYTHON" ] || [ ! -f "$RECORD_PY" ] ||
+        [ ! -f "$RUN_PIPELINE" ] || [ ! -f "$VALIDATE_RESULT" ]; then
         printf '%s[ERROR] 녹화 또는 파이프라인 실행 파일을 확인하세요.%s\n' "$C_ERR" "$C_RESET"
         pause_menu
         return
