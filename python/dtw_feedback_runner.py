@@ -276,15 +276,36 @@ def find_reference_tsvs(
         raise FileNotFoundError(f"target-label 폴더가 없습니다: {target_dir}")
 
     query_resolved = Path(query_path).resolve() if query_path is not None else None
-    reference_paths = sorted(
+    all_reference_paths = sorted(
         path
         for path in target_dir.glob("trial_*/landmarks/full/all_landmarks.tsv")
-        if path.is_file() and (query_resolved is None or path.resolve() != query_resolved)
+        if path.is_file()
     )
-    if not reference_paths:
+    if not all_reference_paths:
         raise FileNotFoundError(
             f"reference TSV가 없습니다: {target_dir}/trial_*/landmarks/full/all_landmarks.tsv"
         )
+
+    is_leave_one_out = (
+        query_resolved is not None
+        and any(path.resolve() == query_resolved for path in all_reference_paths)
+    )
+    reference_paths = [
+        path
+        for path in all_reference_paths
+        if query_resolved is None or path.resolve() != query_resolved
+    ]
+
+    if is_leave_one_out:
+        if not reference_paths:
+            raise FileNotFoundError(
+                f"leave-one-out 비교에 사용할 reference TSV가 없습니다: {target_dir}"
+            )
+        print(
+            "query가 reference 폴더 내부에 있어 leave-one-out 테스트로 실행합니다. "
+            f"비교 reference 수: {len(reference_paths)}"
+        )
+        return reference_paths
 
     if len(reference_paths) < 5:
         raise ValueError(
