@@ -19,6 +19,8 @@ source "$CONFIG_FILE"
 MAX_SAMPLES_PER_WORD="${MAX_SAMPLES_PER_WORD:-5}"
 SESSION_ROOT="${SESSION_ROOT:-data/dataset}"
 CAMERA_WARMUP_SECONDS="${CAMERA_WARMUP_SECONDS:-3}"
+PREVIEW_MIRROR_ENABLED="${PREVIEW_MIRROR_ENABLED:-true}"
+VIDEO_MIRROR_ENABLED="${VIDEO_MIRROR_ENABLED:-false}"
 RECORD_COUNTDOWN_SECONDS=3
 
 VENV_PYTHON="$BASE_DIR/.venv/bin/python"
@@ -66,6 +68,13 @@ clear_screen() {
 
 safe_name() {
     printf '%s' "$1" | tr ' /' '__'
+}
+
+is_true() {
+    case "${1,,}" in
+        1|true|yes|y|on) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 count_saved() {
@@ -370,6 +379,7 @@ finalize_recording() {
     local word="$1" safe_word="$2" user_id="$3" safe_user="$4" recommended="$5" duration="$6" custom="$7"
     local trial_no date_tag trial_name trial_dir raw_dir candidate candidate_log pipeline_input marker collect_log
     local answer record_ok frames relative_candidate relative_video relative_trial
+    local record_args
 
     date_tag="$(date +'%Y%m%d_%H%M%S')"
     mkdir -p "$DATASET_ROOT/$safe_word"
@@ -391,12 +401,22 @@ finalize_recording() {
         printf '카메라가 준비되면 자동으로 촬영이 시작됩니다.\n\n'
 
         record_ok=1
-        "$VENV_PYTHON" "$RECORD_PY" \
+        record_args=(
             --output "$candidate" \
             --camera 0 \
             --duration "$duration" \
             --countdown "$RECORD_COUNTDOWN_SECONDS" \
-            --warmup "$CAMERA_WARMUP_SECONDS" > "$candidate_log" 2>&1 || record_ok=0
+            --warmup "$CAMERA_WARMUP_SECONDS"
+        )
+        if is_true "$PREVIEW_MIRROR_ENABLED"; then
+            record_args+=(--mirror-preview)
+        else
+            record_args+=(--no-mirror-preview)
+        fi
+        if is_true "$VIDEO_MIRROR_ENABLED"; then
+            record_args+=(--mirror-video)
+        fi
+        "$VENV_PYTHON" "$RECORD_PY" "${record_args[@]}" > "$candidate_log" 2>&1 || record_ok=0
 
         if [ "$record_ok" -ne 1 ] || [ ! -s "$candidate" ]; then
             printf '%s[ERROR] 촬영 영상이 생성되지 않았습니다.%s\n' "$C_ERR" "$C_RESET"
@@ -457,6 +477,8 @@ record_seconds=$duration
 custom_duration=$custom
 countdown_seconds=3
 camera_warmup_seconds=$CAMERA_WARMUP_SECONDS
+preview_mirrored=$PREVIEW_MIRROR_ENABLED
+video_mirrored=$VIDEO_MIRROR_ENABLED
 video_path=$raw_dir/video.mp4
 META
                     mv "$candidate" "$raw_dir/video.mp4"
