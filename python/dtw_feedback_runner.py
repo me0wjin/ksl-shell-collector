@@ -22,6 +22,9 @@ from typing import Any
 
 
 PART_NAMES = ("right_hand", "left_hand", "pose")
+# Treat comparisons at or below this distance as effectively identical.
+PERFECT_MATCH_EPS = 1e-6
+POSE_LANDMARK_IDS = (11, 12, 13, 14, 15, 16)
 DEFAULT_PART_WEIGHTS = {
     "right_hand": 0.35,
     "left_hand": 0.35,
@@ -155,7 +158,9 @@ def flatten_landmarks(
     normalized_landmarks = _coerce_landmark_list(landmarks, LANDMARK_COUNTS[part])
 
     vector: list[float] = []
-    for landmark in normalized_landmarks:
+    landmark_ids = POSE_LANDMARK_IDS if part == "pose" else range(len(normalized_landmarks))
+    for landmark_id in landmark_ids:
+        landmark = normalized_landmarks[landmark_id]
         if landmark is None:
             vector.extend([0.0, 0.0, 0.0])
             continue
@@ -186,7 +191,7 @@ def compare_landmark_sequences(
         }
 
     total_distance = calculate_total_distance(part_results)
-    main_feedback_part = _find_largest_distance_part(part_results)
+    main_feedback_part = _select_main_feedback_part(part_results, total_distance)
 
     return {
         "total_distance": total_distance,
@@ -317,6 +322,8 @@ def find_reference_tsvs(
 
 def build_feedback_message(part: str | None) -> str:
     """Build the MVP feedback message from the largest-distance part."""
+    if part is None:
+        return "reference와 거의 동일한 동작입니다. 전체적으로 잘 수행했습니다."
     if part == "right_hand":
         return "오른손 움직임이 reference와 가장 차이가 큽니다. 오른손의 위치와 이동 경로를 확인해보세요."
     if part == "left_hand":
@@ -682,17 +689,36 @@ def _subtract_points(point_a: Point3D, point_b: Point3D) -> Point3D:
     )
 
 
-def _find_largest_distance_part(part_results: dict[str, dict[str, Any]]) -> str | None:
-    """Return the part with the largest finite DTW distance."""
-    finite_parts = [
-        part
+def _select_main_feedback_part(
+    part_results: dict[str, dict[str, Any]],
+    total_distance: float,
+) -> str | None:
+    """Select a hand-first feedback target, reserving pose as a fallback."""
+    distances = {
+        part: float(part_results.get(part, {}).get("dtw_distance", math.inf))
         for part in PART_NAMES
-        if math.isfinite(float(part_results.get(part, {}).get("dtw_distance", math.inf)))
-    ]
-    if not finite_parts:
+    }
+    finite_distances = [distance for distance in distances.values() if math.isfinite(distance)]
+    if not finite_distances:
         return None
 
-    return max(finite_parts, key=lambda part: part_results[part]["dtw_distance"])
+    if (
+        math.isfinite(total_distance)
+        and total_distance <= PERFECT_MATCH_EPS
+    ) or all(distance <= PERFECT_MATCH_EPS for distance in finite_distances):
+        return None
+
+    finite_hands = [
+        part
+        for part in ("right_hand", "left_hand")
+        if math.isfinite(distances[part]) and distances[part] > PERFECT_MATCH_EPS
+    ]
+    if finite_hands:
+        return max(finite_hands, key=lambda part: distances[part])
+
+    if math.isfinite(distances["pose"]) and distances["pose"] > PERFECT_MATCH_EPS:
+        return "pose"
+    return None
 
 
 def _row_value(row: dict[str, Any], names: tuple[str, ...], default: Any) -> Any:
