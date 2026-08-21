@@ -30,9 +30,35 @@ SAFE_WORD=$(echo "$WORD" | tr ' /' '__')
 DATASET_ROOT="$BASE_DIR/$SESSION_ROOT"
 WORD_DIR="$DATASET_ROOT/$SAFE_WORD"
 
-mkdir -p "$WORD_DIR"
+count_saved() {
+    local trial_dir count=0 full_tsv
+    if [ ! -d "$WORD_DIR" ]; then
+        printf '0\n'
+        return
+    fi
+    while IFS= read -r trial_dir; do
+        full_tsv="$trial_dir/landmarks/full/all_landmarks.tsv"
+        if [ -f "$trial_dir/raw/video.mp4" ] &&
+            [ -f "$trial_dir/metadata.txt" ] &&
+            [ -f "$full_tsv" ] &&
+            [ "$(wc -l < "$full_tsv")" -gt 1 ] &&
+            [ -f "$trial_dir/report/report.txt" ]; then
+            count=$((count + 1))
+        fi
+    done < <(find "$WORD_DIR" -mindepth 1 -maxdepth 1 -type d -name 'trial_*' 2>/dev/null)
+    printf '%s\n' "$count"
+}
 
-CURRENT_COUNT=$(find "$WORD_DIR" -mindepth 1 -maxdepth 1 -type d -name "trial_*" | wc -l)
+next_trial_number() {
+    if [ ! -d "$WORD_DIR" ]; then
+        printf '001\n'
+        return
+    fi
+    find "$WORD_DIR" -mindepth 1 -maxdepth 1 -type d -name 'trial_*' -printf '%f\n' 2>/dev/null |
+        awk -F_ '$2 ~ /^[0-9]+$/ { value=$2+0; if (value>max) max=value } END { printf "%03d", max+1 }'
+}
+
+CURRENT_COUNT=$(count_saved)
 
 echo "======================================"
 echo " 단어별 수집 상한선 점검"
@@ -48,8 +74,8 @@ if [ "$CURRENT_COUNT" -ge "$MAX_SAMPLES_PER_WORD" ]; then
 fi
 
 REMAINING_COUNT=$((MAX_SAMPLES_PER_WORD - CURRENT_COUNT))
-NEXT_TRIAL=$((CURRENT_COUNT + 1))
+NEXT_TRIAL=$(next_trial_number)
 
 printf "남은 수집 가능 수: %s\n" "$REMAINING_COUNT"
-printf "다음 촬영 회차   : trial_%03d\n" "$NEXT_TRIAL"
+printf "다음 촬영 회차   : trial_%s\n" "$NEXT_TRIAL"
 echo "[OK] 수집 가능"
