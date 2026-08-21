@@ -23,7 +23,7 @@ bash scripts/collect.sh
 4. 도움말
 0. 종료
 
-동작 목록과 권장 촬영 시간은 UTF-8 TSV 파일인 `config/sign_catalog.tsv`에서 관리합니다. 동작별 저장 한도는 `config/settings.conf`의 `MAX_SAMPLES_PER_WORD`이며 기본값은 5입니다.
+동작 목록과 권장 촬영 시간은 UTF-8 TSV 파일인 `config/sign_catalog.tsv`에서 관리합니다. 동작별 저장 한도는 `config/settings.conf`의 `MAX_SAMPLES_PER_WORD`이며 기본값은 60입니다.
 
 ## 촬영 흐름
 
